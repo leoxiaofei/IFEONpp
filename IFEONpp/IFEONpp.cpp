@@ -6,6 +6,7 @@
 #include <vector>
 #include <Shlwapi.h>
 #include <shellapi.h>
+#include <ShlObj.h>
 
 #pragma comment(lib,"Shlwapi.lib")
 #pragma comment(lib,"Version.lib")
@@ -113,6 +114,81 @@ bool CheckNewModel(TCHAR* szModuleFPath)
 	return bRet;
 }
 
+bool CheckAdmin(TCHAR* szNpppPath)
+{
+	bool bRet(true);
+
+	if (!IsUserAnAdmin())
+	{
+		///权限不够，提权尝试一下。
+		GetModuleFileName(NULL, szNpppPath, MAX_PATH);
+
+		SHELLEXECUTEINFO shExecInfo = { 0 };
+		shExecInfo.cbSize = sizeof(SHELLEXECUTEINFO);
+		shExecInfo.fMask = SEE_MASK_NOCLOSEPROCESS;
+		shExecInfo.hwnd = NULL;
+		shExecInfo.lpVerb = _T("runas");
+		shExecInfo.lpFile = szNpppPath;
+		shExecInfo.lpParameters = L"";
+		shExecInfo.lpDirectory = NULL;
+		shExecInfo.nShow = SW_SHOW;
+		shExecInfo.hInstApp = NULL;
+
+		ShellExecuteEx(&shExecInfo);
+
+		CloseHandle(shExecInfo.hProcess);
+
+		bRet = false;
+	}
+
+	return bRet;
+}
+
+void Setup(TCHAR* szNpppPath)
+{
+	///进行镜像劫持
+	LPTSTR lpIFEO = TEXT("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options");
+	HKEY hKeyIFEO;
+	if (ERROR_SUCCESS == ::RegOpenKeyEx(HKEY_LOCAL_MACHINE, lpIFEO, 0, KEY_WRITE, &hKeyIFEO))
+	{
+		LPTSTR lpNotepad = TEXT("notepad.exe");
+		HKEY hKeyNotepad;
+		if (ERROR_SUCCESS == ::RegOpenKeyEx(hKeyIFEO, lpNotepad, 0, KEY_READ, &hKeyNotepad))
+		{
+			///删除镜像劫持
+			::RegCloseKey(hKeyNotepad);
+			::RegDeleteKeyEx(hKeyIFEO, lpNotepad, KEY_WOW64_32KEY, 0);
+
+			MessageBox(0, _T("取消关联成功。"), _T("提示"), MB_OK | MB_ICONINFORMATION);
+		}
+		else
+		{
+			if (CheckNewModel(szNpppPath))
+			{
+				///"C:\Program Files\Notepad++\notepad++.exe" -notepadStyleCmdline -z
+				_tcscat_s(szNpppPath, MAX_PATH, _T("\" -notepadStyleCmdline -z"));
+			}
+			else
+			{
+				GetModuleFileName(NULL, szNpppPath, MAX_PATH);
+				_tcscat_s(szNpppPath, MAX_PATH, _T("\""));
+			}
+
+			szNpppPath = szNpppPath - 1;
+
+			///创建镜像劫持
+			if (ERROR_SUCCESS == ::RegCreateKeyEx(hKeyIFEO, lpNotepad, 0, REG_NONE,
+				REG_OPTION_NON_VOLATILE, KEY_WRITE | KEY_READ, NULL, &hKeyNotepad, 0))
+			{
+				::RegSetValueEx(hKeyNotepad, TEXT("Debugger"), 0,
+					REG_SZ, (const BYTE*)szNpppPath, _tcslen(szNpppPath) * sizeof(TCHAR));
+
+				MessageBox(0, _T("关联成功。"), _T("提示"), MB_OK | MB_ICONINFORMATION);
+			}
+		}
+	}
+}
+
 int APIENTRY _tWinMain(_In_ HINSTANCE hInstance,
 	_In_opt_ HINSTANCE hPrevInstance,
 	_In_ LPTSTR    lpCmdLine,
@@ -120,88 +196,44 @@ int APIENTRY _tWinMain(_In_ HINSTANCE hInstance,
 {
 	UNREFERENCED_PARAMETER(hPrevInstance);
 
-	TCHAR szPath[MAX_PATH + 1] = { _T('\0') };
-	szPath[0] = _T('\"');
-
-	TCHAR* szNpppPath = szPath + 1;
-	GetModuleFileName(NULL, szNpppPath, MAX_PATH);
-
-	(_tcsrchr(szNpppPath, _T('\\')))[1] = 0;
-	_tcscat_s(szNpppPath, MAX_PATH, TEXT("notepad++.exe"));
-
-	if (!PathFileExists(szNpppPath))
+	do 
 	{
-		MessageBox(0, _T("没有找到Notepad++，\r\n请将\"IFEONpp.exe\"放到Notepad++安装目录后再运行。"), _T("提示"), MB_OK | MB_ICONINFORMATION);
-	}
+		TCHAR szPath[MAX_PATH + 1] = { _T('\0') };
+		szPath[0] = _T('\"');
 
-	if (lpCmdLine[0])
-	{
-		OldModel(lpCmdLine, szNpppPath);
-	}
-	else
-	{
-		///进行镜像劫持
-		LPTSTR lpIFEO = TEXT("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options");
-		HKEY hKeyIFEO;
-		if (ERROR_SUCCESS == ::RegOpenKeyEx(HKEY_LOCAL_MACHINE, lpIFEO, 0, KEY_WRITE, &hKeyIFEO))
+		TCHAR* szNpppPath = szPath + 1;
+		GetModuleFileName(NULL, szNpppPath, MAX_PATH);
+
+		(_tcsrchr(szNpppPath, _T('\\')))[1] = 0;
+		_tcscat_s(szNpppPath, MAX_PATH, TEXT("notepad++.exe"));
+
+		///检查Notepad++是否存在
+		if (!PathFileExists(szNpppPath))
 		{
-			LPTSTR lpNotepad = TEXT("notepad.exe");
-			HKEY hKeyNotepad;
-			if (ERROR_SUCCESS == ::RegOpenKeyEx(hKeyIFEO, lpNotepad, 0, KEY_READ, &hKeyNotepad))
-			{
-				///删除镜像劫持
-				::RegCloseKey(hKeyNotepad);
-				::RegDeleteKeyEx(hKeyIFEO, lpNotepad, KEY_WOW64_32KEY, 0);
-
-				MessageBox(0, _T("取消关联成功。"), _T("提示"), MB_OK | MB_ICONINFORMATION);
-			}
-			else
-			{
-				if (CheckNewModel(szNpppPath))
-				{
-					///"C:\Program Files\Notepad++\notepad++.exe" -notepadStyleCmdline -z
-					_tcscat_s(szNpppPath, MAX_PATH, _T("\" -notepadStyleCmdline -z"));
-				}
-				else
-				{
-					GetModuleFileName(NULL, szNpppPath, MAX_PATH);
-					_tcscat_s(szNpppPath, MAX_PATH, _T("\""));
-				}
-
-				szNpppPath = szPath;
-
-				///创建镜像劫持
-				if (ERROR_SUCCESS == ::RegCreateKeyEx(hKeyIFEO, lpNotepad, 0, REG_NONE,
-					REG_OPTION_NON_VOLATILE, KEY_WRITE | KEY_READ, NULL, &hKeyNotepad, 0))
-				{
-					::RegSetValueEx(hKeyNotepad, TEXT("Debugger"), 0, 
-						REG_SZ, (const BYTE*)szNpppPath, _tcslen(szNpppPath) * sizeof(TCHAR));
-				
-					MessageBox(0, _T("关联成功。"), _T("提示"), MB_OK | MB_ICONINFORMATION);
-				}
-			}
+			MessageBox(0, _T("没有找到Notepad++，\r\n请将\"IFEONpp.exe\"放到Notepad++安装目录后再运行。"), _T("提示"), MB_OK | MB_ICONINFORMATION);
+			break;
 		}
+
+		///如果有参数，说明是劫持调用。
+		if (lpCmdLine[0])
+		{
+			///新版Notepad++直接映射到notepad++.exe上，老版本通过映射到本程序代理调用。
+			OldModel(lpCmdLine, szNpppPath);
+		}
+		///如果没有参数，说明是安装/卸载。
 		else
 		{
-			///权限不够，提权尝试一下。
-			GetModuleFileName(NULL, szNpppPath, MAX_PATH);
+			///安装需要写注册表，需要管理员权限。
+			if (!CheckAdmin(szNpppPath))
+			{
+				break;
+			}
 
-			SHELLEXECUTEINFO shExecInfo = { 0 };
-			shExecInfo.cbSize = sizeof(SHELLEXECUTEINFO);
-			shExecInfo.fMask = SEE_MASK_NOCLOSEPROCESS;
-			shExecInfo.hwnd = NULL;
-			shExecInfo.lpVerb = _T("runas");
-			shExecInfo.lpFile = szNpppPath;
-			shExecInfo.lpParameters = L"";
-			shExecInfo.lpDirectory = NULL;
-			shExecInfo.nShow = SW_SHOW;
-			shExecInfo.hInstApp = NULL;
-
-			ShellExecuteEx(&shExecInfo);
-
-			CloseHandle(shExecInfo.hProcess);
+			///安装/卸载
+			Setup(szNpppPath);
 		}
-	}
+
+	} while (0);
 
 	return 0;
 }

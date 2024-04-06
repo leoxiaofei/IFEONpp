@@ -50,14 +50,16 @@ void OldModel(LPTSTR lpCmdLine, TCHAR* szModuleFPath)
 
 	///打开notepad++
 	LPTSTR lpCmdTxt = FindNextArg(lpCmdLine);
+
 	if (lpCmdTxt[0] != 0 && lpCmdTxt[0] != _T('"'))
 	{
-		_stprintf_s(szPath, MAX_PATH, _T(" \"%s\""), lpCmdTxt);
+		_stprintf_s(szPath, MAX_PATH, _T("%s \"%s\""), szModuleFPath, lpCmdTxt);
 		lpCmdTxt = szPath;
 	}
 	else
 	{
-		lpCmdTxt = lpCmdTxt - 1;
+		_stprintf_s(szPath, MAX_PATH, _T("%s %s"), szModuleFPath, lpCmdTxt);
+		lpCmdTxt = szPath;
 	}
 
 	STARTUPINFO si = { 0 };
@@ -66,7 +68,7 @@ void OldModel(LPTSTR lpCmdLine, TCHAR* szModuleFPath)
 	si.wShowWindow = TRUE;
 
 	BOOL bRet = ::CreateProcess(
-		szModuleFPath,
+		NULL,
 		lpCmdTxt,
 		NULL,
 		NULL,
@@ -151,10 +153,30 @@ void Setup(TCHAR* szNpppPath)
 	HKEY hKeyIFEO;
 	if (ERROR_SUCCESS == ::RegOpenKeyEx(HKEY_LOCAL_MACHINE, lpIFEO, 0, KEY_WRITE, &hKeyIFEO))
 	{
+		bool bHasDebugger = false;
+
 		LPTSTR lpNotepad = TEXT("notepad.exe");
-		HKEY hKeyNotepad;
-		if (ERROR_SUCCESS == ::RegOpenKeyEx(hKeyIFEO, lpNotepad, 0, KEY_READ, &hKeyNotepad))
+		HKEY hKeyNotepad = nullptr;
+		if (ERROR_SUCCESS == ::RegOpenKeyEx(hKeyIFEO, lpNotepad, 0, KEY_WRITE | KEY_READ, &hKeyNotepad))
 		{
+			LONG lResult = ::RegQueryValueEx(hKeyNotepad, TEXT("Debugger"), NULL, NULL, NULL, NULL);
+			if (lResult == ERROR_SUCCESS)
+			{
+				bHasDebugger = true;
+			}
+		}
+
+		if(bHasDebugger)
+		{
+			LONG lResult = ::RegQueryValueEx(hKeyNotepad, TEXT("UseFilter"), NULL, NULL, NULL, NULL);
+			if (lResult == ERROR_SUCCESS)
+			{
+				DWORD dwUseFilter = 1;
+				::RegSetValueEx(hKeyNotepad, TEXT("UseFilter"), 0,
+					REG_DWORD, (const BYTE*)&dwUseFilter, sizeof(dwUseFilter));
+			}
+
+			::RegDeleteValue(hKeyNotepad, TEXT("Debugger"));
 			///删除镜像劫持
 			::RegCloseKey(hKeyNotepad);
 			::RegDeleteKeyEx(hKeyIFEO, lpNotepad, KEY_WOW64_32KEY, 0);
@@ -176,16 +198,29 @@ void Setup(TCHAR* szNpppPath)
 
 			szNpppPath = szNpppPath - 1;
 
-			///创建镜像劫持
-			if (ERROR_SUCCESS == ::RegCreateKeyEx(hKeyIFEO, lpNotepad, 0, REG_NONE,
+			if (hKeyNotepad || ERROR_SUCCESS == ::RegCreateKeyEx(hKeyIFEO, lpNotepad, 0, REG_NONE,
 				REG_OPTION_NON_VOLATILE, KEY_WRITE | KEY_READ, NULL, &hKeyNotepad, 0))
 			{
 				::RegSetValueEx(hKeyNotepad, TEXT("Debugger"), 0,
 					REG_SZ, (const BYTE*)szNpppPath, _tcslen(szNpppPath) * sizeof(TCHAR));
 
+				DWORD dwUseFilter = 0;
+				::RegSetValueEx(hKeyNotepad, TEXT("UseFilter"), 0,
+					REG_DWORD, (const BYTE*)&dwUseFilter, sizeof(dwUseFilter));
+
+				::RegCloseKey(hKeyNotepad);
+
 				MessageBox(0, _T("关联成功。"), _T("提示"), MB_OK | MB_ICONINFORMATION);
 			}
+			else
+			{
+				MessageBox(0, _T("创建<notepad.exe>键值失败，请检查权限。"), _T("错误"), MB_OK | MB_ICONERROR);
+			}
 		}
+	}
+	else
+	{
+		MessageBox(0, _T("对注册表<Image File Execution Options>键值没有写入权限，请检查权限。"), _T("错误"), MB_OK | MB_ICONERROR);
 	}
 }
 
@@ -204,8 +239,11 @@ int APIENTRY _tWinMain(_In_ HINSTANCE hInstance,
 		TCHAR* szNpppPath = szPath + 1;
 		GetModuleFileName(NULL, szNpppPath, MAX_PATH);
 
+		TCHAR* strDst = (_tcsrchr(szNpppPath, _T('-')));
+		strDst = strDst != nullptr ? strDst + 1 : TEXT("notepad++.exe");
+
 		(_tcsrchr(szNpppPath, _T('\\')))[1] = 0;
-		_tcscat_s(szNpppPath, MAX_PATH, TEXT("notepad++.exe"));
+		_tcscat_s(szNpppPath, MAX_PATH, strDst);
 
 		///检查Notepad++是否存在
 		if (!PathFileExists(szNpppPath))
